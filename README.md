@@ -1,8 +1,8 @@
 # openclaw-acp
 
-ACP (Agent Client Protocol) adapter for OpenClaw via Gateway.
+[Agent Client Protocol (ACP)](https://agentclientprotocol.com) adapter for OpenClaw via Gateway.
 
-This adapter bridges the ACP protocol to OpenClaw's local gateway, providing a reliable ACP interface without using OpenClaw's native (buggy) ACP implementation.
+OpenClaw includes a native `openclaw acp` command, but it's a minimal implementation with limited features. This adapter provides a fuller ACP implementation by bridging through OpenClaw's local gateway, offering streaming support, session persistence, and reliable reconnection.
 
 ## How It Works
 
