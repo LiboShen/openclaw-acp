@@ -9,7 +9,7 @@ OpenClaw includes a native `openclaw acp` command, but it's a minimal implementa
 ```
 ┌──────────────┐      stdio      ┌───────────────┐     WebSocket     ┌─────────────────┐
 │  ACP Client  │◄───────────────►│  openclaw-acp │◄──────────────────►│ OpenClaw Gateway│
-│ (Zed, AFK)   │   ACP JSON-RPC  │               │  Gateway protocol  │  (localhost)    │
+│  (Zed, AFK)  │   ACP JSON-RPC  │               │  Gateway protocol  │  (localhost)    │
 └──────────────┘                 └───────────────┘                    └─────────────────┘
 ```
 
@@ -45,7 +45,7 @@ Add to your Zed `settings.json`:
 }
 ```
 
-### With AFK
+### With [AFK](https://github.com/LiboShen/afk-host)
 
 The AFK host can use this adapter by configuring it in `AcpAgents`:
 
