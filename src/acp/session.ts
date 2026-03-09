@@ -174,7 +174,17 @@ export class SessionManager {
    */
   handleChatEvent(payload: ChatEventPayload): void {
     const session = this.getSessionByKey(payload.sessionKey);
-    if (!session) return;
+    if (!session) {
+      if (process.env.DEBUG) {
+        console.error('[openclaw-acp] Chat event for unknown session:', payload.sessionKey);
+      }
+      return;
+    }
+
+    // Log chat events in debug mode
+    if (process.env.DEBUG) {
+      console.error('[openclaw-acp] Chat event:', payload.state, 'seq:', payload.seq);
+    }
 
     const runId = payload.runId;
     
@@ -188,6 +198,12 @@ export class SessionManager {
     if (payload.state !== 'delta') {
       // On final, clean up tracking and resolve completion promise
       if (payload.state === 'final') {
+        const emittedContent = emitted.text + emitted.thinking;
+        if (emittedContent === 0) {
+          console.error('[openclaw-acp] WARNING: Received final with no content emitted. runId:', runId);
+          console.error('[openclaw-acp] Payload:', JSON.stringify(payload));
+        }
+        
         session.emittedLengths.delete(runId);
         session.currentRunId = null;
         
@@ -274,7 +290,18 @@ export class SessionManager {
    */
   handleAgentEvent(payload: AgentEventPayload): void {
     const session = payload.sessionKey ? this.getSessionByKey(payload.sessionKey) : null;
-    if (!session) return;
+    if (!session) {
+      // Log unmatched events for debugging
+      if (process.env.DEBUG) {
+        console.error('[openclaw-acp] Agent event for unknown session:', payload.sessionKey);
+      }
+      return;
+    }
+
+    // Log all agent events in debug mode
+    if (process.env.DEBUG) {
+      console.error('[openclaw-acp] Agent event:', payload.stream, payload.data?.phase ?? '');
+    }
 
     // Handle assistant stream (response after tool calls)
     if (payload.stream === 'assistant') {
