@@ -134,7 +134,10 @@ export class SessionManager {
       throw new Error(`Session not found: ${sessionId}`);
     }
 
+    console.error('[openclaw-acp] Sending prompt to gateway:', session.sessionKey);
     const { runId } = await this.gateway.sendChat(session.sessionKey, text);
+    console.error('[openclaw-acp] Got runId:', runId);
+    
     session.currentRunId = runId;
     // Reset emitted lengths for new run
     session.emittedLengths.set(runId, { text: 0, thinking: 0 });
@@ -142,6 +145,23 @@ export class SessionManager {
     // Wait for completion
     return new Promise((resolve, reject) => {
       session.completionResolvers.set(runId, { resolve, reject });
+      
+      // Safety timeout - if no response in 60s, reject
+      const timeout = setTimeout(() => {
+        if (session.completionResolvers.has(runId)) {
+          session.completionResolvers.delete(runId);
+          console.error('[openclaw-acp] Prompt timeout after 60s, runId:', runId);
+          reject(new Error('Prompt timeout - no response from gateway'));
+        }
+      }, 60000);
+      
+      // Clear timeout when resolved/rejected
+      const originalResolve = resolve;
+      const originalReject = reject;
+      session.completionResolvers.set(runId, {
+        resolve: () => { clearTimeout(timeout); originalResolve(); },
+        reject: (err) => { clearTimeout(timeout); originalReject(err); },
+      });
     });
   }
 
