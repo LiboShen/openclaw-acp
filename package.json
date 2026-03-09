@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "description": "ACP adapter for OpenClaw via Gateway",
   "license": "MIT",
-  "author": "AFK Dev",
+  "author": "Libo Shen",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
