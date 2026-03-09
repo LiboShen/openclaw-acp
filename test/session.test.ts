@@ -502,6 +502,63 @@ describe('SessionManager', () => {
         kind: 'read',
       });
     });
+
+    it('should emit agent_message_chunk for assistant stream (post-tool response)', () => {
+      const session = manager.createSession('/tmp/test');
+      const updates: unknown[] = [];
+      manager.onSessionUpdate = (_, update) => updates.push(update);
+
+      // Simulate assistant stream after tool call
+      manager.handleAgentEvent({
+        runId: 'run-1',
+        sessionKey: session.sessionKey,
+        stream: 'assistant',
+        data: {
+          text: 'Here are the files in your directory:',
+        },
+      } as AgentEventPayload);
+
+      expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({
+        sessionUpdate: 'agent_message_chunk',
+        content: {
+          type: 'text',
+          text: 'Here are the files in your directory:',
+        },
+      });
+    });
+
+    it('should compute delta for assistant stream (accumulated text)', () => {
+      const session = manager.createSession('/tmp/test');
+      const updates: unknown[] = [];
+      manager.onSessionUpdate = (_, update) => updates.push(update);
+
+      // First chunk
+      manager.handleAgentEvent({
+        runId: 'run-1',
+        sessionKey: session.sessionKey,
+        stream: 'assistant',
+        data: { text: 'Hello' },
+      } as AgentEventPayload);
+
+      // Second chunk (accumulated)
+      manager.handleAgentEvent({
+        runId: 'run-1',
+        sessionKey: session.sessionKey,
+        stream: 'assistant',
+        data: { text: 'Hello world' },
+      } as AgentEventPayload);
+
+      expect(updates).toHaveLength(2);
+      expect(updates[0]).toMatchObject({
+        sessionUpdate: 'agent_message_chunk',
+        content: { text: 'Hello' },
+      });
+      expect(updates[1]).toMatchObject({
+        sessionUpdate: 'agent_message_chunk',
+        content: { text: ' world' },
+      });
+    });
   });
 
   describe('mapToolKind', () => {

@@ -265,18 +265,24 @@ export class SessionManager {
   }
 
   /**
-   * Handle agent event from gateway (tool calls).
+   * Handle agent event from gateway (tool calls and assistant stream).
    * 
-   * Gateway tool events have stream: "tool" with phases:
-   * - start: tool call begins, includes name and args
-   * - update: status update during execution
-   * - result: tool completed, includes result/error
+   * Gateway sends different stream types:
+   * - "tool": tool call lifecycle (start, update, result)
+   * - "assistant": assistant response after tool calls
+   * - "lifecycle": response lifecycle (ignored, just for tracking)
    */
   handleAgentEvent(payload: AgentEventPayload): void {
     const session = payload.sessionKey ? this.getSessionByKey(payload.sessionKey) : null;
     if (!session) return;
 
-    // Only handle tool stream events
+    // Handle assistant stream (response after tool calls)
+    if (payload.stream === 'assistant') {
+      this.handleAssistantStream(session, payload);
+      return;
+    }
+
+    // Only handle tool stream events below
     if (payload.stream !== 'tool') return;
 
     const toolCallId = payload.data.toolCallId ?? payload.runId;
@@ -342,6 +348,40 @@ export class SessionManager {
         this.onSessionUpdate?.(session.sessionId, update);
         break;
       }
+    }
+  }
+
+  /**
+   * Handle assistant stream events (response after tool calls).
+   * 
+   * The gateway sends assistant text via agent events with stream: "assistant"
+   * after tool calls complete. This contains the assistant's response.
+   */
+  private handleAssistantStream(session: SessionState, payload: AgentEventPayload): void {
+    const runId = payload.runId;
+    const data = payload.data as { text?: string; delta?: string };
+    
+    // Initialize tracking for this run if needed
+    if (!session.emittedLengths.has(runId)) {
+      session.emittedLengths.set(runId, { text: 0, thinking: 0 });
+    }
+    const emitted = session.emittedLengths.get(runId)!;
+
+    // The gateway may send full text or delta
+    const fullText = data.text ?? '';
+    const newText = fullText.slice(emitted.text);
+
+    if (newText.length > 0) {
+      emitted.text = fullText.length;
+
+      const update: SessionUpdate = {
+        sessionUpdate: 'agent_message_chunk',
+        content: {
+          type: 'text',
+          text: newText,
+        },
+      };
+      this.onSessionUpdate?.(session.sessionId, update);
     }
   }
 
