@@ -68,7 +68,6 @@ export class SessionManager {
       history = historyResult.messages ?? [];
     } catch {
       // Session might not exist yet, that's okay - we'll create it on first prompt
-      history = [];
     }
     
     const state: SessionState = {

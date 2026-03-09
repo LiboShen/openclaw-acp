@@ -293,10 +293,7 @@ describe('GatewayClient', () => {
 
   describe('reconnection', () => {
     it('should attempt reconnection after disconnect', async () => {
-      let reconnected = false;
-      client = new GatewayClient({
-        onReconnect: () => { reconnected = true; },
-      });
+      client = new GatewayClient({});
 
       // Initial connect
       const connectPromise = client.connect();
@@ -312,10 +309,11 @@ describe('GatewayClient', () => {
       // Simulate disconnect
       mockWs.simulateClose();
 
-      // Wait for reconnect attempt (delay is 1000ms, but we'll check state)
+      // State changes to disconnected, reconnection scheduled
       expect(client.getState()).toBe('disconnected');
       
-      // Reconnection would be tested with longer timeout in integration tests
+      // Note: Actual reconnection takes 1000ms+ (exponential backoff)
+      // Full reconnection flow tested in integration tests
     });
 
     it('should not reconnect after explicit disconnect', async () => {

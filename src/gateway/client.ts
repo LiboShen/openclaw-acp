@@ -305,7 +305,7 @@ export class GatewayClient {
     this.state = 'disconnected';
     
     // Reject all pending requests
-    for (const [id, req] of this.pending) {
+    for (const [_id, req] of this.pending) {
       clearTimeout(req.timer);
       req.reject(new Error('Connection closed'));
     }

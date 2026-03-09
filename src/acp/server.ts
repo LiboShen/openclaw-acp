@@ -55,7 +55,7 @@ class OpenClawAgent implements Agent {
         await this.gateway.connect();
         this.initialized = true;
       } catch (err) {
-        throw new Error(`Failed to connect to OpenClaw gateway: ${err}`);
+        throw new Error(`Failed to connect to OpenClaw gateway`, { cause: err });
       }
     }
 
@@ -84,7 +84,7 @@ class OpenClawAgent implements Agent {
       throw new Error('sessionId required');
     }
 
-    const { state, history } = await this.sessionManager.loadSession(
+    const { history } = await this.sessionManager.loadSession(
       sessionId,
       cwd ?? process.cwd()
     );
