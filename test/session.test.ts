@@ -346,6 +346,135 @@ describe('SessionManager', () => {
 
       expect(session.emittedLengths.has('run-1')).toBe(false);
     });
+
+    it('should fetch from history when final arrives with no streamed content', async () => {
+      const session = manager.createSession('/tmp/test');
+      session.emittedLengths.set('run-1', { text: 0, thinking: 0 }); // No content emitted
+      
+      // Mock history response with assistant message
+      vi.mocked(mockGateway.getChatHistory).mockResolvedValue({
+        sessionKey: session.sessionKey,
+        sessionId: 'internal-id',
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
+          { role: 'assistant', content: [
+            { type: 'thinking', thinking: 'Let me respond' },
+            { type: 'text', text: 'Hi there!' },
+          ]},
+        ],
+      });
+
+      const updates: unknown[] = [];
+      manager.onSessionUpdate = (_, update) => updates.push(update);
+
+      // Trigger final with no prior content
+      manager.handleChatEvent({
+        sessionKey: session.sessionKey,
+        runId: 'run-1',
+        state: 'final',
+        message: { role: 'assistant', content: [] },
+      });
+
+      // Wait for async fallback to complete
+      await new Promise(r => setTimeout(r, 50));
+
+      // Should have fetched from history
+      expect(mockGateway.getChatHistory).toHaveBeenCalledWith(session.sessionKey, 5);
+      
+      // Should have emitted both thinking and text from history
+      expect(updates).toHaveLength(2);
+      expect(updates[0]).toEqual({
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'Let me respond' },
+      });
+      expect(updates[1]).toEqual({
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'Hi there!' },
+      });
+    });
+
+    it('should NOT fetch from history when content was streamed', async () => {
+      const session = manager.createSession('/tmp/test');
+      session.emittedLengths.set('run-1', { text: 10, thinking: 0 }); // Content was emitted
+      
+      const updates: unknown[] = [];
+      manager.onSessionUpdate = (_, update) => updates.push(update);
+
+      manager.handleChatEvent({
+        sessionKey: session.sessionKey,
+        runId: 'run-1',
+        state: 'final',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] },
+      });
+
+      // Wait a bit to ensure no async operations happen
+      await new Promise(r => setTimeout(r, 50));
+
+      // Should NOT have fetched from history
+      expect(mockGateway.getChatHistory).not.toHaveBeenCalled();
+      
+      // Should not emit anything (final doesn't emit content directly)
+      expect(updates).toHaveLength(0);
+    });
+
+    it('should handle history fetch errors gracefully', async () => {
+      const session = manager.createSession('/tmp/test');
+      session.emittedLengths.set('run-1', { text: 0, thinking: 0 });
+      session.completionResolvers.set('run-1', { 
+        resolve: vi.fn(), 
+        reject: vi.fn() 
+      });
+      
+      // Mock history to throw an error
+      vi.mocked(mockGateway.getChatHistory).mockRejectedValue(new Error('Network error'));
+
+      const updates: unknown[] = [];
+      manager.onSessionUpdate = (_, update) => updates.push(update);
+
+      manager.handleChatEvent({
+        sessionKey: session.sessionKey,
+        runId: 'run-1',
+        state: 'final',
+        message: { role: 'assistant', content: [] },
+      });
+
+      // Wait for async fallback to complete
+      await new Promise(r => setTimeout(r, 50));
+
+      // Should still clean up properly despite error
+      expect(session.emittedLengths.has('run-1')).toBe(false);
+      
+      // Completion resolver should have been called (resolved, not rejected)
+      const resolver = session.completionResolvers.get('run-1');
+      expect(resolver).toBeUndefined(); // Should be deleted after resolution
+    });
+
+    it('should handle empty history gracefully', async () => {
+      const session = manager.createSession('/tmp/test');
+      session.emittedLengths.set('run-1', { text: 0, thinking: 0 });
+      
+      // Mock empty history
+      vi.mocked(mockGateway.getChatHistory).mockResolvedValue({
+        sessionKey: session.sessionKey,
+        sessionId: 'internal-id',
+        messages: [],
+      });
+
+      const updates: unknown[] = [];
+      manager.onSessionUpdate = (_, update) => updates.push(update);
+
+      manager.handleChatEvent({
+        sessionKey: session.sessionKey,
+        runId: 'run-1',
+        state: 'final',
+        message: { role: 'assistant', content: [] },
+      });
+
+      await new Promise(r => setTimeout(r, 50));
+
+      // Should not emit anything since no assistant message found
+      expect(updates).toHaveLength(0);
+    });
   });
 
   describe('handleAgentEvent', () => {

@@ -191,6 +191,9 @@ export class SessionManager {
    * 
    * The gateway sends accumulated content on each event, not deltas.
    * We track what we've emitted and only send the new portion.
+   * 
+   * NOTE: Sometimes the gateway may not stream content events (e.g., very fast
+   * responses). In this case, we fetch from history as a fallback.
    */
   handleChatEvent(payload: ChatEventPayload): void {
     const session = this.getSessionByKey(payload.sessionKey);
@@ -219,19 +222,15 @@ export class SessionManager {
       // On final, clean up tracking and resolve completion promise
       if (payload.state === 'final') {
         const emittedContent = emitted.text + emitted.thinking;
+        
         if (emittedContent === 0) {
-          console.error('[openclaw-acp] WARNING: Received final with no content emitted. runId:', runId);
-          console.error('[openclaw-acp] Payload:', JSON.stringify(payload));
-        }
-        
-        session.emittedLengths.delete(runId);
-        session.currentRunId = null;
-        
-        // Resolve the completion promise
-        const resolver = session.completionResolvers.get(runId);
-        if (resolver) {
-          session.completionResolvers.delete(runId);
-          resolver.resolve();
+          // No content was streamed - fetch from history as fallback
+          console.error('[openclaw-acp] No streamed content, fetching from history. runId:', runId);
+          this.fetchAndEmitMissingContent(session).finally(() => {
+            this.completeRun(session, runId);
+          });
+        } else {
+          this.completeRun(session, runId);
         }
       }
       return;
@@ -297,6 +296,65 @@ export class SessionManager {
         session.completionResolvers.delete(runId);
         resolver.reject(new Error(payload.error ?? 'Unknown error'));
       }
+    }
+  }
+
+  /**
+   * Complete a run by cleaning up state and resolving the completion promise.
+   */
+  private completeRun(session: SessionState, runId: string): void {
+    session.emittedLengths.delete(runId);
+    session.currentRunId = null;
+    
+    const resolver = session.completionResolvers.get(runId);
+    if (resolver) {
+      session.completionResolvers.delete(runId);
+      resolver.resolve();
+    }
+  }
+
+  /**
+   * Fetch the latest assistant message from history and emit any content
+   * that wasn't streamed. This is a fallback for when streaming doesn't work.
+   */
+  private async fetchAndEmitMissingContent(session: SessionState): Promise<void> {
+    try {
+      const history = await this.gateway.getChatHistory(session.sessionKey, 5);
+      const messages = history.messages ?? [];
+      
+      // Find the most recent assistant message
+      const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+      if (!lastAssistant) {
+        console.error('[openclaw-acp] Fallback: no assistant message found in history');
+        return;
+      }
+
+      let emittedFallback = false;
+
+      // Emit any text or thinking content
+      for (const content of lastAssistant.content) {
+        if (content.type === 'text' && content.text) {
+          const update: SessionUpdate = {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: content.text },
+          };
+          this.onSessionUpdate?.(session.sessionId, update);
+          emittedFallback = true;
+        } else if (content.type === 'thinking' && content.thinking) {
+          const update: SessionUpdate = {
+            sessionUpdate: 'agent_thought_chunk',
+            content: { type: 'text', text: content.thinking },
+          };
+          this.onSessionUpdate?.(session.sessionId, update);
+          emittedFallback = true;
+        }
+      }
+
+      if (emittedFallback) {
+        console.error('[openclaw-acp] Fallback: emitted content from history');
+      }
+    } catch (err) {
+      console.error('[openclaw-acp] Failed to fetch history for fallback:', err);
     }
   }
 
