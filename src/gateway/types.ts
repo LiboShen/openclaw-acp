@@ -84,11 +84,15 @@ export interface SessionInfo {
 
 // Message from chat.history
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'toolResult';
   content: ChatContent[];
   timestamp?: number;
   stopReason?: string;
   errorMessage?: string;
+  // For toolResult messages
+  toolCallId?: string;
+  toolName?: string;
+  isError?: boolean;
 }
 
 export interface ChatContent {

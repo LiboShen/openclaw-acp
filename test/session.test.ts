@@ -553,10 +553,23 @@ describe('SessionManager', () => {
       });
     });
 
-    it('should emit tool_call_update for tool result phase', () => {
+    it('should emit tool_call_update for tool result phase', async () => {
       const session = manager.createSession('/tmp/test');
       const updates: unknown[] = [];
       manager.onSessionUpdate = (_, update) => updates.push(update);
+
+      // Mock getChatHistory to return the tool result
+      vi.mocked(mockGateway.getChatHistory).mockResolvedValue({
+        sessionKey: session.sessionKey,
+        sessionId: session.sessionId,
+        messages: [{
+          role: 'toolResult',
+          toolCallId: 'call_123',
+          toolName: 'exec',
+          content: [{ type: 'text', text: 'file1.txt\nfile2.txt' }],
+          isError: false,
+        }],
+      });
 
       const payload: AgentEventPayload = {
         runId: 'run-1',
@@ -573,19 +586,33 @@ describe('SessionManager', () => {
 
       manager.handleAgentEvent(payload);
 
-      expect(updates).toHaveLength(1);
+      // Wait for async fetch to complete
+      await vi.waitFor(() => expect(updates).toHaveLength(1));
+
       expect(updates[0]).toMatchObject({
         sessionUpdate: 'tool_call_update',
         toolCallId: 'call_123',
         status: 'completed',
-        rawOutput: 'list files\n\n`ls -la`',
+        rawOutput: 'file1.txt\nfile2.txt',
       });
     });
 
-    it('should mark tool as failed on isError', () => {
+    it('should mark tool as failed on isError', async () => {
       const session = manager.createSession('/tmp/test');
       const updates: unknown[] = [];
       manager.onSessionUpdate = (_, update) => updates.push(update);
+
+      // Mock getChatHistory to return the failed tool result
+      vi.mocked(mockGateway.getChatHistory).mockResolvedValue({
+        sessionKey: session.sessionKey,
+        sessionId: session.sessionId,
+        messages: [{
+          role: 'toolResult',
+          toolCallId: 'call_123',
+          content: [{ type: 'text', text: 'Command failed: error' }],
+          isError: true,
+        }],
+      });
 
       const payload: AgentEventPayload = {
         runId: 'run-1',
@@ -600,6 +627,9 @@ describe('SessionManager', () => {
       };
 
       manager.handleAgentEvent(payload);
+
+      // Wait for async fetch to complete
+      await vi.waitFor(() => expect(updates).toHaveLength(1));
 
       expect(updates[0]).toMatchObject({
         sessionUpdate: 'tool_call_update',

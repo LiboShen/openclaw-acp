@@ -359,6 +359,66 @@ export class SessionManager {
   }
 
   /**
+   * Fetch tool output from history and emit tool_call_update.
+   * 
+   * The gateway's tool result event only contains a description (meta),
+   * not the actual output. We fetch from history to get the real output.
+   * 
+   * @param session - The session state
+   * @param toolCallId - The tool call ID to find
+   * @param isError - Whether the tool execution failed
+   */
+  private async fetchToolOutputAndEmit(
+    session: SessionState,
+    toolCallId: string,
+    isError: boolean
+  ): Promise<void> {
+    let toolOutput: string | undefined;
+    let rawOutput: unknown;
+
+    try {
+      // Fetch recent history to find the tool result
+      // Using limit=5 to account for potential concurrent tool calls
+      const history = await this.gateway.getChatHistory(session.sessionKey, 5);
+      const messages = history.messages ?? [];
+
+      // Find the toolResult message matching this toolCallId
+      const toolResult = messages.find(
+        m => m.role === 'toolResult' && m.toolCallId === toolCallId
+      );
+
+      if (toolResult) {
+        // Extract text content from the tool result
+        const textContent = toolResult.content?.find(c => c.type === 'text');
+        if (textContent?.text) {
+          toolOutput = textContent.text;
+          rawOutput = textContent.text;
+        }
+      } else if (process.env.DEBUG) {
+        console.error('[openclaw-acp] Tool result not found in history for:', toolCallId);
+      }
+    } catch (err) {
+      // If fetch fails, continue without output - this is acceptable
+      if (process.env.DEBUG) {
+        console.error('[openclaw-acp] Failed to fetch tool result from history:', err);
+      }
+    }
+
+    // Emit the tool_call_update with whatever output we got (may be undefined)
+    const update: SessionUpdate = {
+      sessionUpdate: 'tool_call_update',
+      toolCallId,
+      status: isError ? 'failed' : 'completed',
+      rawOutput,
+      content: toolOutput ? [{
+        type: 'content' as const,
+        content: { type: 'text' as const, text: toolOutput },
+      }] : undefined,
+    };
+    this.onSessionUpdate?.(session.sessionId, update);
+  }
+
+  /**
    * Handle agent event from gateway (tool calls and assistant stream).
    * 
    * Gateway sends different stream types:
@@ -420,21 +480,15 @@ export class SessionManager {
       }
 
       case 'result': {
-        // Tool completed - include rawOutput and content
+        // Tool completed - fetch actual output from history
         const isError = payload.data.isError ?? false;
-        const meta = payload.data.meta;
         
-        const update: SessionUpdate = {
-          sessionUpdate: 'tool_call_update',
-          toolCallId,
-          status: isError ? 'failed' : 'completed',
-          rawOutput: payload.data.output ?? meta,
-          content: meta ? [{
-            type: 'content' as const,
-            content: { type: 'text' as const, text: meta },
-          }] : undefined,
-        };
-        this.onSessionUpdate?.(session.sessionId, update);
+        // Fetch tool output asynchronously, don't block the event handler
+        this.fetchToolOutputAndEmit(session, toolCallId, isError).catch(err => {
+          if (process.env.DEBUG) {
+            console.error('[openclaw-acp] Failed to fetch tool output:', err);
+          }
+        });
         break;
       }
 
