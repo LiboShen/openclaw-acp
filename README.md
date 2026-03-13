@@ -25,6 +25,30 @@ OpenClaw includes a native `openclaw acp` command, but it's a minimal implementa
 
 - OpenClaw installed and gateway running (`openclaw` command available)
 - Gateway token configured in `~/.openclaw/openclaw.json`
+- **Device identity initialized** (required for operator scopes)
+
+### Device Identity Setup
+
+OpenClaw requires device identity authentication to grant operator scopes (`operator.write`, `operator.read`). Without device identity, the adapter cannot send prompts to the gateway.
+
+The device identity is automatically created when you run any OpenClaw CLI command that connects to the gateway. To initialize it:
+
+```bash
+# Start the gateway if not running
+openclaw gateway &
+
+# Initialize device identity (this triggers auto-pairing)
+openclaw devices list
+```
+
+This creates `~/.openclaw/identity/device.json` and `~/.openclaw/identity/device-auth.json`.
+
+For containerized deployments, ensure the device identity is initialized after the gateway starts:
+
+```bash
+# In your entrypoint script, after starting the gateway:
+openclaw devices list > /dev/null 2>&1
+```
 
 ## Usage
 
