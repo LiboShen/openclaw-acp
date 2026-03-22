@@ -237,39 +237,57 @@ export class SessionManager {
     }
 
     // Extract and emit new content
+    // NOTE: Gateway sends accumulated content. We concatenate all text/thinking items
+    // first, then compute delta against what we've already emitted.
     if (payload.message?.content) {
+      // Concatenate all text items into one string
+      let fullText = '';
+      let fullThinking = '';
+      
       for (const item of payload.message.content) {
         if (item.type === 'text' && item.text) {
-          const fullText = item.text;
-          const newText = fullText.slice(emitted.text);
-          
-          if (newText.length > 0) {
-            const update: SessionUpdate = {
-              sessionUpdate: 'agent_message_chunk',
-              content: {
-                type: 'text',
-                text: newText,
-              },
-            };
-            this.onSessionUpdate?.(session.sessionId, update);
-            emitted.text = fullText.length;
-          }
+          fullText += item.text;
         } else if (item.type === 'thinking' && item.thinking) {
-          const fullThinking = item.thinking;
-          const newThinking = fullThinking.slice(emitted.thinking);
-          
-          if (newThinking.length > 0) {
-            const update: SessionUpdate = {
-              sessionUpdate: 'agent_thought_chunk',
-              content: {
-                type: 'text',
-                text: newThinking,
-              },
-            };
-            this.onSessionUpdate?.(session.sessionId, update);
-            emitted.thinking = fullThinking.length;
-          }
+          fullThinking += item.thinking;
         }
+      }
+
+      // Emit delta for text content
+      if (fullText.length > emitted.text) {
+        const newText = fullText.slice(emitted.text);
+        const update: SessionUpdate = {
+          sessionUpdate: 'agent_message_chunk',
+          content: {
+            type: 'text',
+            text: newText,
+          },
+        };
+        this.onSessionUpdate?.(session.sessionId, update);
+        emitted.text = fullText.length;
+      } else if (fullText.length < emitted.text && fullText.length > 0) {
+        // Warning: gateway sent shorter text than we've emitted
+        // This could indicate a bug in accumulation or a resend
+        if (process.env.DEBUG) {
+          console.error(
+            '[openclaw-acp] WARNING: Text regression detected.',
+            `Expected >= ${emitted.text} chars, got ${fullText.length}.`,
+            `Text: "${fullText.slice(0, 50)}${fullText.length > 50 ? '...' : ''}"`
+          );
+        }
+      }
+
+      // Emit delta for thinking content
+      if (fullThinking.length > emitted.thinking) {
+        const newThinking = fullThinking.slice(emitted.thinking);
+        const update: SessionUpdate = {
+          sessionUpdate: 'agent_thought_chunk',
+          content: {
+            type: 'text',
+            text: newThinking,
+          },
+        };
+        this.onSessionUpdate?.(session.sessionId, update);
+        emitted.thinking = fullThinking.length;
       }
     }
 
