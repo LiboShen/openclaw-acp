@@ -222,6 +222,7 @@ export class SessionManager {
       // On final, clean up tracking and resolve completion promise
       if (payload.state === 'final') {
         const emittedContent = emitted.text + emitted.thinking;
+        console.error(`[FINAL] state=final, emittedContent=${emittedContent}, runId=${runId}`);
         
         if (emittedContent === 0) {
           // No content was streamed - fetch from history as fallback
@@ -237,57 +238,41 @@ export class SessionManager {
     }
 
     // Extract and emit new content
-    // NOTE: Gateway sends accumulated content. We concatenate all text/thinking items
-    // first, then compute delta against what we've already emitted.
     if (payload.message?.content) {
-      // Concatenate all text items into one string
-      let fullText = '';
-      let fullThinking = '';
-      
       for (const item of payload.message.content) {
         if (item.type === 'text' && item.text) {
-          fullText += item.text;
+          const fullText = item.text;
+          const newText = fullText.slice(emitted.text);
+          
+          console.error(`[CHAT] fullText.len=${fullText.length}, emitted=${emitted.text}, delta.len=${newText.length}, seq=${payload.seq}`);
+          
+          if (newText.length > 0) {
+            const update: SessionUpdate = {
+              sessionUpdate: 'agent_message_chunk',
+              content: {
+                type: 'text',
+                text: newText,
+              },
+            };
+            this.onSessionUpdate?.(session.sessionId, update);
+            emitted.text = fullText.length;
+          }
         } else if (item.type === 'thinking' && item.thinking) {
-          fullThinking += item.thinking;
+          const fullThinking = item.thinking;
+          const newThinking = fullThinking.slice(emitted.thinking);
+          
+          if (newThinking.length > 0) {
+            const update: SessionUpdate = {
+              sessionUpdate: 'agent_thought_chunk',
+              content: {
+                type: 'text',
+                text: newThinking,
+              },
+            };
+            this.onSessionUpdate?.(session.sessionId, update);
+            emitted.thinking = fullThinking.length;
+          }
         }
-      }
-
-      // Emit delta for text content
-      if (fullText.length > emitted.text) {
-        const newText = fullText.slice(emitted.text);
-        const update: SessionUpdate = {
-          sessionUpdate: 'agent_message_chunk',
-          content: {
-            type: 'text',
-            text: newText,
-          },
-        };
-        this.onSessionUpdate?.(session.sessionId, update);
-        emitted.text = fullText.length;
-      } else if (fullText.length < emitted.text && fullText.length > 0) {
-        // Warning: gateway sent shorter text than we've emitted
-        // This could indicate a bug in accumulation or a resend
-        if (process.env.DEBUG) {
-          console.error(
-            '[openclaw-acp] WARNING: Text regression detected.',
-            `Expected >= ${emitted.text} chars, got ${fullText.length}.`,
-            `Text: "${fullText.slice(0, 50)}${fullText.length > 50 ? '...' : ''}"`
-          );
-        }
-      }
-
-      // Emit delta for thinking content
-      if (fullThinking.length > emitted.thinking) {
-        const newThinking = fullThinking.slice(emitted.thinking);
-        const update: SessionUpdate = {
-          sessionUpdate: 'agent_thought_chunk',
-          content: {
-            type: 'text',
-            text: newThinking,
-          },
-        };
-        this.onSessionUpdate?.(session.sessionId, update);
-        emitted.thinking = fullThinking.length;
       }
     }
 
@@ -352,6 +337,7 @@ export class SessionManager {
       // Emit any text or thinking content
       for (const content of lastAssistant.content) {
         if (content.type === 'text' && content.text) {
+          console.error(`[FALLBACK] Emitting full text from history, len=${content.text.length}`);
           const update: SessionUpdate = {
             sessionUpdate: 'agent_message_chunk',
             content: { type: 'text', text: content.text },
@@ -547,6 +533,8 @@ export class SessionManager {
     // The gateway may send full text or delta
     const fullText = data.text ?? '';
     const newText = fullText.slice(emitted.text);
+
+    console.error(`[ASST] fullText.len=${fullText.length}, emitted=${emitted.text}, delta.len=${newText.length}`);
 
     if (newText.length > 0) {
       emitted.text = fullText.length;

@@ -238,9 +238,60 @@ export class GatewayClient {
 
   private loadToken(): string | null {
     try {
-      const configPath = join(homedir(), '.openclaw', 'openclaw.json');
-      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
-      return config?.gateway?.auth?.token ?? null;
+      // Support OPENCLAW_CONFIG_PATH env var, fallback to ~/.openclaw/openclaw.json
+      const configPath = process.env.OPENCLAW_CONFIG_PATH 
+        || join(homedir(), '.openclaw', 'openclaw.json');
+      
+      // Read config, stripping JSON5 comments
+      const configText = readFileSync(configPath, 'utf-8');
+      const jsonText = configText.replace(/^\s*\/\/.*$/gm, ''); // Strip // comments
+      const config = JSON.parse(jsonText);
+      
+      const tokenValue = config?.gateway?.auth?.token;
+      if (!tokenValue) return null;
+      
+      // If token is a string, use it directly
+      if (typeof tokenValue === 'string') {
+        return tokenValue;
+      }
+      
+      // If token is a SecretRef object, resolve it
+      if (typeof tokenValue === 'object' && tokenValue.source === 'file') {
+        return this.resolveSecretRef(config, tokenValue);
+      }
+      
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Resolve a SecretRef to its actual value.
+   * SecretRef format: { source: "file", provider: "providerName", id: "/key-path" }
+   */
+  private resolveSecretRef(
+    config: Record<string, unknown>,
+    ref: { source: string; provider: string; id: string }
+  ): string | null {
+    try {
+      // Get the secrets provider config
+      const providers = (config?.secrets as Record<string, unknown>)?.providers as Record<string, unknown>;
+      const provider = providers?.[ref.provider] as { path?: string; mode?: string } | undefined;
+      
+      if (!provider?.path) return null;
+      
+      // Expand ~ in path
+      const secretsPath = provider.path.replace(/^~/, homedir());
+      
+      // Read secrets file
+      const secretsText = readFileSync(secretsPath, 'utf-8');
+      const secrets = JSON.parse(secretsText);
+      
+      // Extract key from id (e.g., "/gateway-token" -> "gateway-token")
+      const key = ref.id.replace(/^\//, '');
+      
+      return secrets?.[key] ?? null;
     } catch {
       return null;
     }
@@ -248,7 +299,10 @@ export class GatewayClient {
 
   private loadDeviceIdentity(): DeviceIdentity | null {
     try {
-      const identityPath = join(homedir(), '.openclaw', 'identity', 'device.json');
+      // Support OPENCLAW_STATE_DIR env var, fallback to ~/.openclaw
+      const stateDir = process.env.OPENCLAW_STATE_DIR 
+        || join(homedir(), '.openclaw');
+      const identityPath = join(stateDir, 'identity', 'device.json');
       if (!existsSync(identityPath)) return null;
       return JSON.parse(readFileSync(identityPath, 'utf-8'));
     } catch {
