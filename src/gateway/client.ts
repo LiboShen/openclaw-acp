@@ -248,6 +248,8 @@ export class GatewayClient {
       },
       auth: { token: this.token },
       caps: ['tool-events'],
+      role: 'operator',
+      scopes: ['operator.admin', 'operator.write', 'operator.read'],
     });
   }
 
