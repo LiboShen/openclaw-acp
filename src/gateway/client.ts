@@ -111,7 +111,6 @@ export class GatewayClient {
         
         if (msg.type === 'event') {
           if (msg.event === 'connect.challenge') {
-            // Authenticate with token
             this.sendConnectRequest()
               .then(() => {
                 clearTimeout(timeout);
@@ -240,7 +239,7 @@ export class GatewayClient {
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        id: 'acp',
+        id: 'cli',
         displayName: 'OpenClaw ACP',
         version: '0.0.1',
         platform: process.platform,
