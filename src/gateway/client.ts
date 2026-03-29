@@ -2,27 +2,11 @@
  * OpenClaw Gateway WebSocket client with reconnection support.
  */
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import WebSocket from 'ws';
-import { randomUUID, createPrivateKey, sign } from 'crypto';
-
-interface DeviceIdentity {
-  deviceId: string;
-  publicKeyPem: string;
-  privateKeyPem: string;
-}
-
-interface DeviceAuth {
-  deviceId: string;
-  tokens: {
-    operator?: {
-      token: string;
-      scopes: string[];
-    };
-  };
-}
+import { randomUUID } from 'crypto';
 import type {
   GatewayRequest,
   GatewayMessage,
@@ -127,10 +111,8 @@ export class GatewayClient {
         
         if (msg.type === 'event') {
           if (msg.event === 'connect.challenge') {
-            // Extract challenge nonce from payload
-            const challenge = msg.payload as { nonce: string; ts: number } | undefined;
-            // Authenticate with challenge nonce
-            this.sendConnectRequest(challenge?.nonce)
+            // Authenticate with token
+            this.sendConnectRequest()
               .then(() => {
                 clearTimeout(timeout);
                 this.state = 'connected';
@@ -237,146 +219,35 @@ export class GatewayClient {
   // --- Private ---
 
   private loadToken(): string | null {
+    // Try env var first (simplest)
+    if (process.env.OPENCLAW_GATEWAY_TOKEN) {
+      return process.env.OPENCLAW_GATEWAY_TOKEN;
+    }
+    
+    // Fallback to config file for backward compatibility
     try {
-      // Support OPENCLAW_CONFIG_PATH env var, fallback to ~/.openclaw/openclaw.json
       const configPath = process.env.OPENCLAW_CONFIG_PATH 
         || join(homedir(), '.openclaw', 'openclaw.json');
-      
-      // Read config, stripping JSON5 comments
-      const configText = readFileSync(configPath, 'utf-8');
-      const jsonText = configText.replace(/^\s*\/\/.*$/gm, ''); // Strip // comments
-      const config = JSON.parse(jsonText);
-      
-      const tokenValue = config?.gateway?.auth?.token;
-      if (!tokenValue) return null;
-      
-      // If token is a string, use it directly
-      if (typeof tokenValue === 'string') {
-        return tokenValue;
-      }
-      
-      // If token is a SecretRef object, resolve it
-      if (typeof tokenValue === 'object' && tokenValue.source === 'file') {
-        return this.resolveSecretRef(config, tokenValue);
-      }
-      
-      return null;
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      return config?.gateway?.auth?.token ?? null;
     } catch {
       return null;
     }
   }
 
-  /**
-   * Resolve a SecretRef to its actual value.
-   * SecretRef format: { source: "file", provider: "providerName", id: "/key-path" }
-   */
-  private resolveSecretRef(
-    config: Record<string, unknown>,
-    ref: { source: string; provider: string; id: string }
-  ): string | null {
-    try {
-      // Get the secrets provider config
-      const providers = (config?.secrets as Record<string, unknown>)?.providers as Record<string, unknown>;
-      const provider = providers?.[ref.provider] as { path?: string; mode?: string } | undefined;
-      
-      if (!provider?.path) return null;
-      
-      // Expand ~ in path
-      const secretsPath = provider.path.replace(/^~/, homedir());
-      
-      // Read secrets file
-      const secretsText = readFileSync(secretsPath, 'utf-8');
-      const secrets = JSON.parse(secretsText);
-      
-      // Extract key from id (e.g., "/gateway-token" -> "gateway-token")
-      const key = ref.id.replace(/^\//, '');
-      
-      return secrets?.[key] ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  private loadDeviceIdentity(): DeviceIdentity | null {
-    try {
-      // Support OPENCLAW_STATE_DIR env var, fallback to ~/.openclaw
-      const stateDir = process.env.OPENCLAW_STATE_DIR 
-        || join(homedir(), '.openclaw');
-      const identityPath = join(stateDir, 'identity', 'device.json');
-      if (!existsSync(identityPath)) return null;
-      return JSON.parse(readFileSync(identityPath, 'utf-8'));
-    } catch {
-      return null;
-    }
-  }
-
-  private signPayload(identity: DeviceIdentity, payload: string): string {
-    const privateKey = createPrivateKey(identity.privateKeyPem);
-    const signature = sign(null, Buffer.from(payload, 'utf-8'), privateKey);
-    return signature.toString('base64url');
-  }
-
-  private extractRawEd25519PublicKey(pem: string): string {
-    // Decode the PEM to get SubjectPublicKeyInfo
-    const base64 = pem
-      .replace(/-----BEGIN PUBLIC KEY-----/, '')
-      .replace(/-----END PUBLIC KEY-----/, '')
-      .replace(/\n/g, '')
-      .trim();
-    const der = Buffer.from(base64, 'base64');
-    
-    // Ed25519 SubjectPublicKeyInfo has a 12-byte prefix, raw key is last 32 bytes
-    // Prefix: 302a300506032b6570032100
-    const rawKey = der.subarray(-32);
-    
-    // Convert to base64url
-    return rawKey.toString('base64url');
-  }
-
-  private async sendConnectRequest(challengeNonce?: string): Promise<void> {
-    const identity = this.loadDeviceIdentity();
-    
-    const clientId = 'cli';
-    const clientMode = 'backend';
-    const role = 'operator';
-    const scopes = ['operator.admin', 'operator.write', 'operator.read'];
-    
-    // Build device identity for scopes (only if we have identity, nonce, and token)
-    let device: Record<string, unknown> | undefined;
-    if (identity && challengeNonce && this.token) {
-      const signedAt = Date.now();
-      const publicKey = this.extractRawEd25519PublicKey(identity.publicKeyPem);
-      
-      // Build v2 payload: v2|deviceId|clientId|clientMode|role|scopes|signedAtMs|token|nonce
-      const scopesStr = scopes.join(',');
-      const payload = `v2|${identity.deviceId}|${clientId}|${clientMode}|${role}|${scopesStr}|${signedAt}|${this.token}|${challengeNonce}`;
-      const signature = this.signPayload(identity, payload);
-      
-      device = {
-        id: identity.deviceId,
-        publicKey,
-        signature,
-        signedAt,
-        nonce: challengeNonce,
-      };
-      console.error('[openclaw-acp] Using device identity for scopes');
-    }
-
+  private async sendConnectRequest(): Promise<void> {
     await this.request('connect', {
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        id: clientId,
+        id: 'acp',
         displayName: 'OpenClaw ACP',
         version: '0.0.1',
         platform: process.platform,
-        mode: clientMode,
+        mode: 'backend',
       },
       auth: { token: this.token },
       caps: ['tool-events'],
-      role,
-      scopes,
-      ...(device && { device }),
     });
   }
 
