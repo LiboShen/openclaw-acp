@@ -1,6 +1,6 @@
 {
   "name": "openclaw-acp",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "ACP adapter for OpenClaw via Gateway",
   "license": "MIT",
   "author": "Libo Shen",
