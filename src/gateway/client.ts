@@ -2,11 +2,11 @@
  * OpenClaw Gateway WebSocket client with reconnection support.
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import WebSocket from 'ws';
-import { randomUUID } from 'crypto';
+import { randomUUID, createPrivateKey, sign } from 'crypto';
 import type {
   GatewayRequest,
   GatewayMessage,
@@ -27,6 +27,12 @@ interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+interface DeviceIdentity {
+  deviceId: string;
+  publicKeyPem: string;
+  privateKeyPem: string;
 }
 
 export interface GatewayClientEvents {
@@ -111,7 +117,9 @@ export class GatewayClient {
         
         if (msg.type === 'event') {
           if (msg.event === 'connect.challenge') {
-            this.sendConnectRequest()
+            // Extract nonce from challenge for device identity signing
+            const challenge = msg.payload as { nonce?: string } | undefined;
+            this.sendConnectRequest(challenge?.nonce)
               .then(() => {
                 clearTimeout(timeout);
                 this.state = 'connected';
@@ -234,21 +242,78 @@ export class GatewayClient {
     }
   }
 
-  private async sendConnectRequest(): Promise<void> {
+  private loadDeviceIdentity(): DeviceIdentity | null {
+    try {
+      // Use OPENCLAW_STATE_DIR if set, otherwise ~/.openclaw
+      const stateDir = process.env.OPENCLAW_STATE_DIR || join(homedir(), '.openclaw');
+      const identityPath = join(stateDir, 'identity', 'device.json');
+      if (!existsSync(identityPath)) return null;
+      return JSON.parse(readFileSync(identityPath, 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+
+  private signPayload(identity: DeviceIdentity, payload: string): string {
+    const privateKey = createPrivateKey(identity.privateKeyPem);
+    const signature = sign(null, Buffer.from(payload, 'utf-8'), privateKey);
+    return signature.toString('base64url');
+  }
+
+  private extractRawEd25519PublicKey(pem: string): string {
+    // Extract raw 32-byte Ed25519 public key from PEM/DER format
+    const base64 = pem
+      .replace(/-----BEGIN PUBLIC KEY-----/, '')
+      .replace(/-----END PUBLIC KEY-----/, '')
+      .replace(/\n/g, '')
+      .trim();
+    const der = Buffer.from(base64, 'base64');
+    // Ed25519 public key is last 32 bytes of the DER encoding
+    const rawKey = der.subarray(-32);
+    return rawKey.toString('base64url');
+  }
+
+  private async sendConnectRequest(challengeNonce?: string): Promise<void> {
+    const identity = this.loadDeviceIdentity();
+    const clientId = 'cli';
+    const clientMode = 'backend';
+    const role = 'operator';
+    const scopes = ['operator.admin', 'operator.write', 'operator.read'];
+
+    // Build device auth if identity exists and we have a challenge nonce
+    let device: Record<string, unknown> | undefined;
+    if (identity && challengeNonce && this.token) {
+      const signedAt = Date.now();
+      const publicKey = this.extractRawEd25519PublicKey(identity.publicKeyPem);
+      const scopesStr = scopes.join(',');
+      // Sign: v2|deviceId|clientId|clientMode|role|scopes|signedAt|token|nonce
+      const payload = `v2|${identity.deviceId}|${clientId}|${clientMode}|${role}|${scopesStr}|${signedAt}|${this.token}|${challengeNonce}`;
+      const signature = this.signPayload(identity, payload);
+      device = {
+        id: identity.deviceId,
+        publicKey,
+        signature,
+        signedAt,
+        nonce: challengeNonce,
+      };
+      console.error('[openclaw-acp] Using device identity for scopes');
+    }
+
     await this.request('connect', {
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        id: 'cli',
+        id: clientId,
         displayName: 'OpenClaw ACP',
         version: '0.0.1',
         platform: process.platform,
-        mode: 'backend',
+        mode: clientMode,
       },
       auth: { token: this.token },
       caps: ['tool-events'],
-      role: 'operator',
-      scopes: ['operator.admin', 'operator.write', 'operator.read'],
+      role,
+      scopes,
+      ...(device && { device }),
     });
   }
 
